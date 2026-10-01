@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.env
+.env.*
+*.env
+Get Content.env
+
+.streamlit/secrets.toml
+
+battery.db
+
+dashboard_backup.py
+
+.vscode/
+.idea/
+
+*.log
+.DS_Store
