@@ -59,14 +59,11 @@ supabase_status = False
 
 try:
     if SUPABASE_URL and SUPABASE_KEY:
-        supabase = create_client(
-            SUPABASE_URL,
-            SUPABASE_KEY
-        )
-        supabase_status = True
-except Exception:
-    supabase = None
-    supabase_status = False
+try:
+    test_result = supabase.table("battery_data").select("id").limit(1).execute()
+    print("SUPABASE CLOUD TEST:", test_result.data)
+    except Exception as e:
+    	print("SUPABASE CLOUD ERROR:", e)
 
 
 # ============================================================
