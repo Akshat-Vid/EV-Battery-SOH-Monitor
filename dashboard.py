@@ -24,11 +24,20 @@ st.set_page_config(
 # ============================================================
 # LOAD ENVIRONMENT VARIABLES
 # ============================================================
-
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# ---------------------------------------------------------
+# SUPABASE CREDENTIALS
+# Works locally and on Streamlit Cloud
+# ---------------------------------------------------------
+
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+except Exception:
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
 
 DB_NAME = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
