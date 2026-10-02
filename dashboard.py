@@ -5,70 +5,155 @@ import os
 import pickle
 import time
 import sqlite3
-
 from dotenv import load_dotenv
 from supabase import create_client
 
 
-# ============================================================
-# PAGE CONFIGURATION
-# ============================================================
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 
 st.set_page_config(
-    page_title="EV Battery Intelligence",
+    page_title="EV Battery SOH Monitor",
     page_icon="🔋",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 
-# ============================================================
+# =========================================================
 # LOAD ENVIRONMENT VARIABLES
-# ============================================================
+# =========================================================
+
 load_dotenv()
 
-# ---------------------------------------------------------
-# SUPABASE CREDENTIALS
-# Works locally and on Streamlit Cloud
-# ---------------------------------------------------------
 
+# =========================================================
+# SUPABASE CREDENTIALS
+# Works on Streamlit Cloud AND locally
+# =========================================================
+
+SUPABASE_URL = None
+SUPABASE_KEY = None
+
+# First try Streamlit Cloud Secrets
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 except Exception:
+    pass
+
+# If Cloud Secrets are unavailable, use local .env
+if not SUPABASE_URL:
     SUPABASE_URL = os.getenv("SUPABASE_URL")
+
+if not SUPABASE_KEY:
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 
-DB_NAME = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "battery.db"
-)
+# =========================================================
+# DATABASE CONFIGURATION
+# =========================================================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, "battery.db")
+
+
+# =========================================================
+# SUPABASE CONNECTION
+# =========================================================
+
+supabase = None
+supabase_error = None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(
+            SUPABASE_URL,
+            SUPABASE_KEY
+        )
+    except Exception as e:
+        supabase_error = str(e)
+else:
+    supabase_error = "Supabase URL or key is missing."
+
+
+# =========================================================
+# TEMPORARY SUPABASE DIAGNOSTIC
+# =========================================================
+
+# This does NOT display your actual credentials.
+# It only tells us whether Streamlit Cloud received them.
+
+with st.expander("🔧 Connection Diagnostic", expanded=False):
+
+    st.write(
+        "SUPABASE URL FOUND:",
+        bool(SUPABASE_URL)
+    )
+
+    st.write(
+        "SUPABASE KEY FOUND:",
+        bool(SUPABASE_KEY)
+    )
+
+    if supabase is not None:
+
+        try:
+
+            test_result = (
+                supabase
+                .table("battery_data")
+                .select("id")
+                .limit(1)
+                .execute()
+            )
+
+            st.success("Supabase connection successful.")
+
+            st.write(
+                "SUPABASE TEST RESULT:",
+                test_result.data
+            )
+
+        except Exception as e:
+
+            st.error(
+                f"SUPABASE ERROR: {e}"
+            )
+
+    else:
+
+        st.error(
+            f"SUPABASE CONNECTION NOT CREATED: {supabase_error}"
+        )
+
+
+# =========================================================
+# LOAD XGBOOST MODEL
+# =========================================================
 
 MODEL_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
+    BASE_DIR,
     "xgboost_soh_model.pkl"
 )
 
-
-# ============================================================
-# SUPABASE CONNECTION
-# ============================================================
-
-supabase = None
-supabase_status = False
+model = None
+model_error = None
 
 try:
-    if SUPABASE_URL and SUPABASE_KEY:
-try:
-    test_result = supabase.table("battery_data").select("id").limit(1).execute()
-    print("SUPABASE CLOUD TEST:", test_result.data)
-    except Exception as e:
-    	print("SUPABASE CLOUD ERROR:", e)
+
+    with open(MODEL_PATH, "rb") as f:
+        model = pickle.load(f)
+
+except Exception as e:
+
+    model_error = str(e)
 
 
-# ============================================================
+# =========================================================
 # LOGIN
-# ============================================================
+# =========================================================
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -76,122 +161,66 @@ if "logged_in" not in st.session_state:
 
 def login_page():
 
-    st.title("🔋 EV Battery Intelligence")
-
-    st.subheader("Secure Login")
-
-    st.write(
-        "AI Based Electric Vehicle Battery "
-        "State-of-Health Monitoring System"
+    st.markdown(
+        """
+        <div style="text-align:center;">
+            <h1>🔋 EV Battery SOH Monitor</h1>
+            <p>AI-Based Battery State-of-Health Monitoring System</p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-    username = st.text_input(
-        "Username"
-    )
+    st.markdown("---")
 
-    password = st.text_input(
-        "Password",
-        type="password"
-    )
+    col1, col2, col3 = st.columns([1, 2, 1])
 
-    if st.button(
-        "Login",
-        use_container_width=True
-    ):
+    with col2:
 
-        if username == "admin" and password == "evbattery123":
+        st.subheader("🔐 Login")
 
-            st.session_state.logged_in = True
-            st.rerun()
-
-        else:
-
-            st.error(
-                "Invalid username or password."
-            )
-
-
-# ============================================================
-# SUPABASE DATA LOADER
-# ============================================================
-
-@st.cache_data(ttl=1)
-def load_supabase_data():
-
-    if supabase is None:
-        return pd.DataFrame()
-
-    try:
-
-        response = (
-            supabase
-            .table("battery_data")
-            .select(
-                "id,received_at,battery_id,cycle,raw_data"
-            )
-            .order(
-                "id",
-                desc=True
-            )
-            .limit(500)
-            .execute()
+        username = st.text_input(
+            "Username"
         )
 
-        rows = response.data
-
-        if not rows:
-            return pd.DataFrame()
-
-        records = []
-
-        for row in rows:
-
-            raw = row.get("raw_data", {})
-
-            if isinstance(raw, str):
-
-                try:
-                    raw = json.loads(raw)
-
-                except Exception:
-                    raw = {}
-
-            record = {
-                "id": row.get("id"),
-                "received_at": row.get("received_at"),
-                "battery_id": row.get("battery_id"),
-                "cycle": row.get("cycle")
-            }
-
-            if isinstance(raw, dict):
-                record.update(raw)
-
-            records.append(record)
-
-        df = pd.DataFrame(records)
-
-        return df
-
-    except Exception as e:
-
-        st.error(
-            f"Supabase database error: {e}"
+        password = st.text_input(
+            "Password",
+            type="password"
         )
 
-        return pd.DataFrame()
+        login_button = st.button(
+            "Login",
+            use_container_width=True
+        )
+
+        if login_button:
+
+            if (
+                username == "admin"
+                and password == "evbattery123"
+            ):
+
+                st.session_state.logged_in = True
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "Invalid username or password."
+                )
 
 
-# ============================================================
+# =========================================================
 # SQLITE FALLBACK
-# ============================================================
+# =========================================================
 
 def load_sqlite_data():
 
-    if not os.path.exists(DB_NAME):
-
-        return pd.DataFrame()
-
     try:
+
+        if not os.path.exists(DB_NAME):
+            return pd.DataFrame()
 
         conn = sqlite3.connect(
             DB_NAME
@@ -219,164 +248,215 @@ def load_sqlite_data():
         if df.empty:
             return pd.DataFrame()
 
-        records = []
-
-        for _, row in df.iterrows():
-
-            raw = row["raw_data"]
-
-            try:
-
-                if isinstance(raw, str):
-                    raw = json.loads(raw)
-
-            except Exception:
-
-                raw = {}
-
-            record = {
-                "id": row["id"],
-                "received_at": row["received_at"],
-                "battery_id": row["battery_id"],
-                "cycle": row["cycle"]
-            }
-
-            if isinstance(raw, dict):
-                record.update(raw)
-
-            records.append(record)
-
-        return pd.DataFrame(records)
+        return parse_database_data(df)
 
     except Exception:
 
         return pd.DataFrame()
 
 
-# ============================================================
-# MAIN DATA LOADER
-# ============================================================
+# =========================================================
+# PARSE DATABASE DATA
+# =========================================================
 
-def load_data():
+def parse_database_data(df):
 
-    # Try Supabase first
+    if df.empty:
+        return pd.DataFrame()
 
-    if supabase_status:
+    records = []
 
-        df = load_supabase_data()
+    for _, row in df.iterrows():
 
-        if not df.empty:
+        raw = row.get(
+            "raw_data",
+            {}
+        )
 
-            return df, "Supabase Cloud"
+        try:
 
-    # Local fallback
+            if isinstance(raw, str):
+                raw = json.loads(raw)
 
-    df = load_sqlite_data()
+            if not isinstance(raw, dict):
+                continue
 
-    if not df.empty:
+        except Exception:
+            continue
 
-        return df, "Local SQLite"
+        record = {
+            "id": row.get("id"),
+            "received_at": row.get("received_at"),
+            "Battery_ID": raw.get(
+                "Battery_ID",
+                row.get("battery_id")
+            ),
+            "Cycle": raw.get(
+                "Cycle",
+                row.get("cycle")
+            ),
+            "Voltage_V": raw.get(
+                "Voltage_V"
+            ),
+            "Current_A": raw.get(
+                "Current_A"
+            ),
+            "Temperature_C": raw.get(
+                "Temperature_C"
+            ),
+            "Capacity_Ah": raw.get(
+                "Capacity_Ah"
+            ),
+            "Internal_Resistance_Ohm": raw.get(
+                "Internal_Resistance_Ohm"
+            ),
+            "Charge_Time_min": raw.get(
+                "Charge_Time_min"
+            ),
+            "SOH": raw.get(
+                "SOH"
+            ),
+            "Cooling_ON": raw.get(
+                "Cooling_ON",
+                False
+            ),
+            "Load_Reduced": raw.get(
+                "Load_Reduced",
+                False
+            )
+        }
 
-    return pd.DataFrame(), "No Data"
+        records.append(record)
+
+    if not records:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(
+        records
+    )
+
+    return result
 
 
-# ============================================================
-# LOAD AI MODEL
-# ============================================================
+# =========================================================
+# LOAD SUPABASE DATA
+# =========================================================
 
-@st.cache_resource
-def load_model():
+def load_supabase_data():
+
+    if supabase is None:
+        return pd.DataFrame()
 
     try:
 
-        with open(
-            MODEL_PATH,
-            "rb"
-        ) as file:
+        response = (
+            supabase
+            .table("battery_data")
+            .select(
+                "id,received_at,battery_id,cycle,raw_data"
+            )
+            .order(
+                "id",
+                desc=True
+            )
+            .limit(500)
+            .execute()
+        )
 
-            model = pickle.load(file)
+        data = response.data
 
-        return model
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(
+            data
+        )
+
+        return parse_database_data(df)
 
     except Exception as e:
 
-        st.error(
-            f"Unable to load AI model: {e}"
+        st.session_state.supabase_load_error = str(e)
+
+        return pd.DataFrame()
+
+
+# =========================================================
+# LOAD DATA
+# =========================================================
+
+def get_data():
+
+    df = load_supabase_data()
+
+    # Supabase is the primary database.
+    # SQLite is only used when Supabase is unavailable.
+    if not df.empty:
+        return df
+
+    # Local fallback
+    local_df = load_sqlite_data()
+
+    return local_df
+
+
+# =========================================================
+# AI SOH PREDICTION
+# =========================================================
+
+def predict_soh(row):
+
+    if model is None:
+        return None
+
+    try:
+
+        features = pd.DataFrame(
+            [[
+                float(row["Voltage_V"]),
+                float(row["Current_A"]),
+                float(row["Temperature_C"]),
+                float(row["Capacity_Ah"]),
+                float(row["Internal_Resistance_Ohm"]),
+                float(row["Charge_Time_min"])
+            ]],
+            columns=[
+                "Voltage_V",
+                "Current_A",
+                "Temperature_C",
+                "Capacity_Ah",
+                "Internal_Resistance_Ohm",
+                "Charge_Time_min"
+            ]
         )
 
+        prediction = model.predict(
+            features
+        )[0]
+
+        return round(
+            float(prediction),
+            2
+        )
+
+    except Exception:
         return None
 
 
-# ============================================================
-# AI SOH PREDICTION
-# ============================================================
-
-def predict_soh(df):
-
-    model = load_model()
-
-    if model is None:
-
-        return df
-
-    required_features = [
-
-        "Voltage_V",
-        "Current_A",
-        "Temperature_C",
-        "Capacity_Ah",
-        "Internal_Resistance_Ohm",
-        "Charge_Time_min"
-
-    ]
-
-    for column in required_features:
-
-        if column not in df.columns:
-
-            return df
-
-    try:
-
-        X = df[required_features].copy()
-
-        df["AI_Predicted_SOH"] = model.predict(X)
-
-        df["AI_Predicted_SOH"] = (
-            df["AI_Predicted_SOH"]
-            .clip(0, 100)
-        )
-
-    except Exception as e:
-
-        st.warning(
-            f"AI prediction unavailable: {e}"
-        )
-
-    return df
-
-
-# ============================================================
+# =========================================================
 # ALERT GENERATION
-# ============================================================
+# =========================================================
 
-def generate_alerts(row):
+def get_alerts(row, predicted_soh=None):
 
     alerts = []
 
     temperature = row.get(
-        "Temperature_C",
-        None
+        "Temperature_C"
     )
 
     voltage = row.get(
-        "Voltage_V",
-        None
-    )
-
-    predicted_soh = row.get(
-        "AI_Predicted_SOH",
-        None
+        "Voltage_V"
     )
 
     cooling = row.get(
@@ -390,151 +470,689 @@ def generate_alerts(row):
     )
 
     # Temperature
-
     if pd.notna(temperature):
 
         if temperature >= 60:
 
             alerts.append(
-                (
-                    "CRITICAL",
-                    f"Battery temperature is {temperature:.2f} °C"
-                )
+                "🔴 CRITICAL: Battery temperature is extremely high."
             )
 
         elif temperature >= 50:
 
             alerts.append(
-                (
-                    "WARNING",
-                    f"High battery temperature: {temperature:.2f} °C"
-                )
+                "🟠 WARNING: Battery temperature is high."
             )
 
     # Voltage
-
     if pd.notna(voltage):
 
         if voltage < 3.0:
 
             alerts.append(
-                (
-                    "CRITICAL",
-                    f"Low battery voltage: {voltage:.3f} V"
-                )
+                "🔴 CRITICAL: Battery voltage is too low."
             )
 
-    # SOH
-
-    if pd.notna(predicted_soh):
+    # AI SOH
+    if predicted_soh is not None:
 
         if predicted_soh < 75:
 
             alerts.append(
-                (
-                    "CRITICAL",
-                    f"Predicted SOH is {predicted_soh:.2f}%"
-                )
+                "🔴 CRITICAL: Predicted SOH is below 75%."
+            )
+
+        elif predicted_soh < 85:
+
+            alerts.append(
+                "🟠 WARNING: Predicted SOH is below 85%."
             )
 
     # Cooling
-
     if cooling:
 
         alerts.append(
-            (
-                "ACTION",
-                "Cooling system is ON"
-            )
+            "🔵 Cooling system is ON."
         )
 
     # Load reduction
-
     if load_reduced:
 
         alerts.append(
-            (
-                "ACTION",
-                "Battery load has been reduced"
-            )
+            "🟣 Load reduction is active."
         )
 
     return alerts
 
 
-# ============================================================
-# DASHBOARD
-# ============================================================
+# =========================================================
+# MAIN APPLICATION
+# =========================================================
 
-def dashboard():
+if not st.session_state.logged_in:
 
-    # --------------------------------------------------------
-    # HEADER
-    # --------------------------------------------------------
+    login_page()
+
+    st.stop()
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+
+st.sidebar.title(
+    "🔋 EV SOH Monitor"
+)
+
+st.sidebar.markdown(
+    "AI-Based EV Battery Monitoring"
+)
+
+st.sidebar.markdown("---")
+
+page = st.sidebar.radio(
+    "Navigation",
+    [
+        "Live Dashboard",
+        "AI SOH Prediction",
+        "Alerts",
+        "Battery History",
+        "System Info"
+    ]
+)
+
+st.sidebar.markdown("---")
+
+if st.sidebar.button(
+    "Logout",
+    use_container_width=True
+):
+
+    st.session_state.logged_in = False
+
+    st.rerun()
+
+
+# =========================================================
+# GET DATA
+# =========================================================
+
+df = get_data()
+
+
+# =========================================================
+# NO DATA MESSAGE
+# =========================================================
+
+if df.empty:
+
+    st.error(
+        "No battery data found in the database."
+    )
+
+    st.info(
+        "Make sure hivemq_receiver.py and mqtt_publisher.py are running."
+    )
+
+    # Show diagnostic information
+    if "supabase_load_error" in st.session_state:
+
+        st.error(
+            "Supabase read error: "
+            + st.session_state.supabase_load_error
+        )
+
+    st.stop()
+
+
+# =========================================================
+# CLEAN NUMERIC COLUMNS
+# =========================================================
+
+numeric_columns = [
+    "Voltage_V",
+    "Current_A",
+    "Temperature_C",
+    "Capacity_Ah",
+    "Internal_Resistance_Ohm",
+    "Charge_Time_min",
+    "SOH",
+    "Cycle",
+    "Battery_ID"
+]
+
+for col in numeric_columns:
+
+    if col in df.columns:
+
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
+
+
+# =========================================================
+# SORT DATA
+# =========================================================
+
+if "id" in df.columns:
+
+    df = df.sort_values(
+        "id",
+        ascending=True
+    )
+
+else:
+
+    df = df.sort_values(
+        "Cycle",
+        ascending=True
+    )
+
+
+# =========================================================
+# LATEST DATA
+# =========================================================
+
+latest = df.iloc[-1]
+
+
+# =========================================================
+# LIVE DASHBOARD
+# =========================================================
+
+if page == "Live Dashboard":
 
     st.title(
-        "🔋 EV Battery Intelligence Dashboard"
+        "🔋 EV Battery Live Dashboard"
     )
 
     st.caption(
-        "AI Based EV Battery State-of-Health "
-        "Estimation & Real-Time Monitoring"
+        "Real-time EV battery monitoring using MQTT, Supabase and AI"
     )
 
-    # --------------------------------------------------------
-    # SIDEBAR
-    # --------------------------------------------------------
+    st.markdown("---")
 
-    st.sidebar.title(
-        "Navigation"
+    # -----------------------------------------------------
+    # Latest battery values
+    # -----------------------------------------------------
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+
+        st.metric(
+            "Battery ID",
+            int(latest["Battery_ID"])
+            if pd.notna(latest["Battery_ID"])
+            else "N/A"
+        )
+
+    with col2:
+
+        st.metric(
+            "Cycle",
+            int(latest["Cycle"])
+            if pd.notna(latest["Cycle"])
+            else "N/A"
+        )
+
+    with col3:
+
+        temperature = latest[
+            "Temperature_C"
+        ]
+
+        st.metric(
+            "Temperature",
+            f"{temperature:.2f} °C"
+            if pd.notna(temperature)
+            else "N/A"
+        )
+
+    with col4:
+
+        voltage = latest[
+            "Voltage_V"
+        ]
+
+        st.metric(
+            "Voltage",
+            f"{voltage:.3f} V"
+            if pd.notna(voltage)
+            else "N/A"
+        )
+
+    st.markdown("---")
+
+    # -----------------------------------------------------
+    # Electrical parameters
+    # -----------------------------------------------------
+
+    st.subheader(
+        "⚡ Battery Parameters"
     )
 
-    page = st.sidebar.radio(
-        "Select Page",
-        [
-            "Live Dashboard",
-            "AI SOH Prediction",
-            "Alerts",
-            "Battery History",
-            "System Info"
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+
+        current = latest[
+            "Current_A"
+        ]
+
+        st.metric(
+            "Current",
+            f"{current:.3f} A"
+            if pd.notna(current)
+            else "N/A"
+        )
+
+    with c2:
+
+        capacity = latest[
+            "Capacity_Ah"
+        ]
+
+        st.metric(
+            "Capacity",
+            f"{capacity:.3f} Ah"
+            if pd.notna(capacity)
+            else "N/A"
+        )
+
+    with c3:
+
+        resistance = latest[
+            "Internal_Resistance_Ohm"
+        ]
+
+        st.metric(
+            "Internal Resistance",
+            f"{resistance:.4f} Ω"
+            if pd.notna(resistance)
+            else "N/A"
+        )
+
+    with c4:
+
+        charge_time = latest[
+            "Charge_Time_min"
+        ]
+
+        st.metric(
+            "Charge Time",
+            f"{charge_time:.2f} min"
+            if pd.notna(charge_time)
+            else "N/A"
+        )
+
+    st.markdown("---")
+
+    # -----------------------------------------------------
+    # SOH
+    # -----------------------------------------------------
+
+    st.subheader(
+        "🤖 State of Health"
+    )
+
+    predicted = predict_soh(
+        latest
+    )
+
+    actual_soh = latest.get(
+        "SOH"
+    )
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+
+        if pd.notna(actual_soh):
+
+            st.metric(
+                "Actual SOH",
+                f"{actual_soh:.2f}%"
+            )
+
+        else:
+
+            st.metric(
+                "Actual SOH",
+                "N/A"
+            )
+
+    with c2:
+
+        if predicted is not None:
+
+            st.metric(
+                "AI Predicted SOH",
+                f"{predicted:.2f}%"
+            )
+
+        else:
+
+            st.metric(
+                "AI Predicted SOH",
+                "N/A"
+            )
+
+    with c3:
+
+        if predicted is None:
+
+            status = "UNKNOWN"
+
+        elif predicted >= 85:
+
+            status = "GOOD"
+
+        elif predicted >= 75:
+
+            status = "WARNING"
+
+        else:
+
+            status = "CRITICAL"
+
+        st.metric(
+            "Battery Status",
+            status
+        )
+
+    st.markdown("---")
+
+    # -----------------------------------------------------
+    # Alerts
+    # -----------------------------------------------------
+
+    alerts = get_alerts(
+        latest,
+        predicted
+    )
+
+    st.subheader(
+        "🚨 Current Alerts"
+    )
+
+    if alerts:
+
+        for alert in alerts:
+
+            st.warning(
+                alert
+            )
+
+    else:
+
+        st.success(
+            "✅ No abnormal activity detected."
+        )
+
+    st.markdown("---")
+
+    # -----------------------------------------------------
+    # Temperature chart
+    # -----------------------------------------------------
+
+    st.subheader(
+        "🌡️ Temperature Trend"
+    )
+
+    chart_df = df.tail(100).copy()
+
+    if "Cycle" in chart_df.columns:
+
+        chart_df = chart_df.set_index(
+            "Cycle"
+        )
+
+    st.line_chart(
+        chart_df[
+            ["Temperature_C"]
         ]
     )
 
-    st.sidebar.divider()
+    # -----------------------------------------------------
+    # SOH chart
+    # -----------------------------------------------------
 
-    if st.sidebar.button(
-        "Logout",
-        use_container_width=True
-    ):
+    st.subheader(
+        "📈 SOH Trend"
+    )
 
-        st.session_state.logged_in = False
-        st.rerun()
+    soh_chart = df.tail(100).copy()
 
-    # --------------------------------------------------------
-    # LOAD DATA
-    # --------------------------------------------------------
+    if "Cycle" in soh_chart.columns:
 
-    df, data_source = load_data()
-
-    if df.empty:
-
-        st.warning(
-            "No battery data available yet."
+        soh_chart = soh_chart.set_index(
+            "Cycle"
         )
 
-        st.info(
-            "Make sure hivemq_receiver.py is running "
-            "and Supabase is receiving data."
+    columns = []
+
+    if "SOH" in soh_chart.columns:
+        columns.append("SOH")
+
+    predicted_values = []
+
+    for _, row in soh_chart.iterrows():
+
+        predicted_values.append(
+            predict_soh(row)
         )
 
-        return
+    if predicted_values:
 
-    # --------------------------------------------------------
-    # CONVERT NUMERIC COLUMNS
-    # --------------------------------------------------------
+        soh_chart[
+            "AI Predicted SOH"
+        ] = predicted_values
 
-    numeric_columns = [
+        columns.append(
+            "AI Predicted SOH"
+        )
 
+    if columns:
+
+        st.line_chart(
+            soh_chart[columns]
+        )
+
+
+# =========================================================
+# AI SOH PREDICTION PAGE
+# =========================================================
+
+elif page == "AI SOH Prediction":
+
+    st.title(
+        "🤖 AI-Based SOH Prediction"
+    )
+
+    st.write(
+        "The XGBoost model estimates battery State-of-Health "
+        "using six battery parameters."
+    )
+
+    st.markdown("---")
+
+    if model_error:
+
+        st.error(
+            f"Model loading error: {model_error}"
+        )
+
+    elif model is None:
+
+        st.error(
+            "XGBoost model could not be loaded."
+        )
+
+    else:
+
+        st.success(
+            "XGBoost model loaded successfully."
+        )
+
+        st.subheader(
+            "Model Input Parameters"
+        )
+
+        input_row = latest
+
+        prediction = predict_soh(
+            input_row
+        )
+
+        if prediction is not None:
+
+            st.metric(
+                "AI Predicted SOH",
+                f"{prediction:.2f}%"
+            )
+
+            if prediction >= 85:
+
+                st.success(
+                    "Battery condition: GOOD"
+                )
+
+            elif prediction >= 75:
+
+                st.warning(
+                    "Battery condition: WARNING"
+                )
+
+            else:
+
+                st.error(
+                    "Battery condition: CRITICAL"
+                )
+
+        st.markdown("---")
+
+        display_data = {
+
+            "Voltage (V)": latest.get(
+                "Voltage_V"
+            ),
+
+            "Current (A)": latest.get(
+                "Current_A"
+            ),
+
+            "Temperature (°C)": latest.get(
+                "Temperature_C"
+            ),
+
+            "Capacity (Ah)": latest.get(
+                "Capacity_Ah"
+            ),
+
+            "Internal Resistance (Ω)": latest.get(
+                "Internal_Resistance_Ohm"
+            ),
+
+            "Charge Time (min)": latest.get(
+                "Charge_Time_min"
+            )
+        }
+
+        st.dataframe(
+            pd.DataFrame(
+                [display_data]
+            ),
+            use_container_width=True
+        )
+
+
+# =========================================================
+# ALERT PAGE
+# =========================================================
+
+elif page == "Alerts":
+
+    st.title(
+        "🚨 Battery Alerts"
+    )
+
+    alert_records = []
+
+    for _, row in df.tail(200).iterrows():
+
+        prediction = predict_soh(
+            row
+        )
+
+        alerts = get_alerts(
+            row,
+            prediction
+        )
+
+        for alert in alerts:
+
+            alert_records.append({
+
+                "Battery ID": row.get(
+                    "Battery_ID"
+                ),
+
+                "Cycle": row.get(
+                    "Cycle"
+                ),
+
+                "Temperature": row.get(
+                    "Temperature_C"
+                ),
+
+                "Voltage": row.get(
+                    "Voltage_V"
+                ),
+
+                "AI SOH": prediction,
+
+                "Alert": alert
+
+            })
+
+    if alert_records:
+
+        alerts_df = pd.DataFrame(
+            alert_records
+        )
+
+        st.dataframe(
+            alerts_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    else:
+
+        st.success(
+            "✅ No abnormal activity detected."
+        )
+
+
+# =========================================================
+# BATTERY HISTORY
+# =========================================================
+
+elif page == "Battery History":
+
+    st.title(
+        "📊 Battery History"
+    )
+
+    st.write(
+        f"Showing latest {min(len(df), 500)} records."
+    )
+
+    display_columns = [
+
+        "Battery_ID",
         "Cycle",
         "Voltage_V",
         "Current_A",
@@ -542,554 +1160,46 @@ def dashboard():
         "Capacity_Ah",
         "Internal_Resistance_Ohm",
         "Charge_Time_min",
-        "SOH"
+        "SOH",
+        "Cooling_ON",
+        "Load_Reduced"
 
     ]
 
-    for column in numeric_columns:
-
-        if column in df.columns:
-
-            df[column] = pd.to_numeric(
-                df[column],
-                errors="coerce"
-            )
-
-    # --------------------------------------------------------
-    # AI PREDICTION
-    # --------------------------------------------------------
-
-    df = predict_soh(df)
-
-    # ========================================================
-    # LIVE DASHBOARD
-    # ========================================================
-
-    if page == "Live Dashboard":
-
-        st.header(
-            "📡 Live Battery Monitoring"
-        )
-
-        latest = df.iloc[0]
-
-        # ----------------------------------------------------
-        # STATUS
-        # ----------------------------------------------------
-
-        temperature = latest.get(
-            "Temperature_C",
-            0
-        )
-
-        predicted_soh = latest.get(
-            "AI_Predicted_SOH",
-            None
-        )
-
-        if temperature >= 60:
-
-            status = "🔴 CRITICAL"
-
-        elif temperature >= 50:
-
-            status = "🟠 WARNING"
-
-        elif (
-            pd.notna(predicted_soh)
-            and predicted_soh < 75
-        ):
-
-            status = "🔴 LOW SOH"
-
-        else:
-
-            status = "🟢 GOOD"
-
-        st.success(
-            f"System Status: {status}"
-        )
-
-        st.caption(
-            f"Data Source: {data_source}"
-        )
-
-        # ----------------------------------------------------
-        # PRIMARY METRICS
-        # ----------------------------------------------------
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-
-            st.metric(
-                "🔋 Battery ID",
-                str(
-                    latest.get(
-                        "Battery_ID",
-                        latest.get(
-                            "battery_id",
-                            "-"
-                        )
-                    )
-                )
-            )
-
-        with col2:
-
-            st.metric(
-                "🔄 Cycle",
-                f"{int(latest['Cycle'])}"
-                if pd.notna(
-                    latest.get("Cycle")
-                )
-                else "-"
-            )
-
-        with col3:
-
-            st.metric(
-                "🌡️ Temperature",
-                f"{latest['Temperature_C']:.2f} °C"
-                if pd.notna(
-                    latest.get("Temperature_C")
-                )
-                else "-"
-            )
-
-        with col4:
-
-            st.metric(
-                "💚 Actual SOH",
-                f"{latest['SOH']:.2f}%"
-                if pd.notna(
-                    latest.get("SOH")
-                )
-                else "-"
-            )
-
-        # ----------------------------------------------------
-        # SECONDARY METRICS
-        # ----------------------------------------------------
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-
-            st.metric(
-                "⚡ Voltage",
-                f"{latest['Voltage_V']:.3f} V"
-                if pd.notna(
-                    latest.get("Voltage_V")
-                )
-                else "-"
-            )
-
-        with col2:
-
-            st.metric(
-                "🔌 Current",
-                f"{latest['Current_A']:.2f} A"
-                if pd.notna(
-                    latest.get("Current_A")
-                )
-                else "-"
-            )
-
-        with col3:
-
-            st.metric(
-                "🔋 Capacity",
-                f"{latest['Capacity_Ah']:.3f} Ah"
-                if pd.notna(
-                    latest.get("Capacity_Ah")
-                )
-                else "-"
-            )
-
-        with col4:
-
-            st.metric(
-                "🤖 AI Predicted SOH",
-                f"{predicted_soh:.2f}%"
-                if pd.notna(predicted_soh)
-                else "-"
-            )
-
-        # ----------------------------------------------------
-        # THIRD ROW
-        # ----------------------------------------------------
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-
-            resistance = latest.get(
-                "Internal_Resistance_Ohm",
-                None
-            )
-
-            st.metric(
-                "Resistance",
-                f"{resistance:.5f} Ω"
-                if pd.notna(resistance)
-                else "-"
-            )
-
-        with col2:
-
-            charge_time = latest.get(
-                "Charge_Time_min",
-                None
-            )
-
-            st.metric(
-                "Charge Time",
-                f"{charge_time:.2f} min"
-                if pd.notna(charge_time)
-                else "-"
-            )
-
-        with col3:
-
-            cooling = latest.get(
-                "Cooling_ON",
-                False
-            )
-
-            st.metric(
-                "Cooling",
-                "ON" if cooling else "OFF"
-            )
-
-        with col4:
-
-            load_reduced = latest.get(
-                "Load_Reduced",
-                False
-            )
-
-            st.metric(
-                "Load Reduced",
-                "YES" if load_reduced else "NO"
-            )
-
-        # ----------------------------------------------------
-        # ALERT
-        # ----------------------------------------------------
-
-        alerts = generate_alerts(
-            latest
-        )
-
-        if alerts:
-
-            st.subheader(
-                "🚨 Current Alerts"
-            )
-
-            for level, message in alerts:
-
-                if level == "CRITICAL":
-
-                    st.error(
-                        f"🔴 {message}"
-                    )
-
-                elif level == "WARNING":
-
-                    st.warning(
-                        f"🟠 {message}"
-                    )
-
-                else:
-
-                    st.info(
-                        f"🔵 {message}"
-                    )
-
-        # ----------------------------------------------------
-        # CHARTS
-        # ----------------------------------------------------
-
-        st.subheader(
-            "📊 Live Battery Parameters"
-        )
-
-        chart_df = (
-            df
-            .sort_values("id")
-            .tail(100)
-            .copy()
-        )
-
-        if "Temperature_C" in chart_df:
-
-            st.line_chart(
-                chart_df.set_index("id")[
-                    ["Temperature_C"]
-                ]
-            )
-
-        if "Voltage_V" in chart_df:
-
-            st.line_chart(
-                chart_df.set_index("id")[
-                    ["Voltage_V"]
-                ]
-            )
-
-        if "Current_A" in chart_df:
-
-            st.line_chart(
-                chart_df.set_index("id")[
-                    ["Current_A"]
-                ]
-            )
-
-        if (
-            "SOH" in chart_df
-            and "AI_Predicted_SOH" in chart_df
-        ):
-
-            st.line_chart(
-                chart_df.set_index("id")[
-                    [
-                        "SOH",
-                        "AI_Predicted_SOH"
-                    ]
-                ]
-            )
-
-        # ----------------------------------------------------
-        # RECENT DATA
-        # ----------------------------------------------------
-
-        st.subheader(
-            "📋 Recent Battery Data"
-        )
-
-        display_columns = [
-
-            "received_at",
-            "Battery_ID",
+    available_columns = [
+        col
+        for col in display_columns
+        if col in df.columns
+    ]
+
+    st.dataframe(
+        df[
+            available_columns
+        ].sort_values(
             "Cycle",
-            "Voltage_V",
-            "Current_A",
-            "Temperature_C",
-            "Capacity_Ah",
-            "Internal_Resistance_Ohm",
-            "Charge_Time_min",
-            "SOH",
-            "AI_Predicted_SOH"
+            ascending=False
+        ),
+        use_container_width=True,
+        hide_index=True
+    )
 
-        ]
 
-        display_columns = [
-            c for c in display_columns
-            if c in df.columns
-        ]
+# =========================================================
+# SYSTEM INFORMATION
+# =========================================================
 
-        st.dataframe(
-            df[display_columns].head(20),
-            use_container_width=True
-        )
+elif page == "System Info":
 
-    # ========================================================
-    # AI SOH PAGE
-    # ========================================================
+    st.title(
+        "ℹ️ System Information"
+    )
 
-    elif page == "AI SOH Prediction":
+    st.subheader(
+        "Project Architecture"
+    )
 
-        st.header(
-            "🤖 AI Based SOH Prediction"
-        )
-
-        st.write(
-            "The XGBoost machine-learning model "
-            "uses battery operating parameters "
-            "to estimate State-of-Health."
-        )
-
-        if "AI_Predicted_SOH" in df.columns:
-
-            latest = df.iloc[0]
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-
-                st.metric(
-                    "Actual SOH",
-                    f"{latest['SOH']:.2f}%"
-                )
-
-            with col2:
-
-                st.metric(
-                    "AI Predicted SOH",
-                    f"{latest['AI_Predicted_SOH']:.2f}%"
-                )
-
-            with col3:
-
-                difference = (
-                    latest["AI_Predicted_SOH"]
-                    - latest["SOH"]
-                )
-
-                st.metric(
-                    "Prediction Difference",
-                    f"{difference:+.2f}%"
-                )
-
-            st.subheader(
-                "SOH Prediction History"
-            )
-
-            history = (
-                df
-                .sort_values("id")
-                .tail(200)
-            )
-
-            st.line_chart(
-                history.set_index("id")[
-                    [
-                        "SOH",
-                        "AI_Predicted_SOH"
-                    ]
-                ]
-            )
-
-            st.subheader(
-                "AI Input Parameters"
-            )
-
-            input_columns = [
-
-                "Voltage_V",
-                "Current_A",
-                "Temperature_C",
-                "Capacity_Ah",
-                "Internal_Resistance_Ohm",
-                "Charge_Time_min"
-
-            ]
-
-            available = [
-                c for c in input_columns
-                if c in latest.index
-            ]
-
-            st.dataframe(
-                pd.DataFrame(
-                    {
-                        "Parameter": available,
-                        "Value": [
-                            latest[c]
-                            for c in available
-                        ]
-                    }
-                ),
-                use_container_width=True
-            )
-
-    # ========================================================
-    # ALERTS PAGE
-    # ========================================================
-
-    elif page == "Alerts":
-
-        st.header(
-            "🚨 Battery Alerts"
-        )
-
-        alert_records = []
-
-        for _, row in df.iterrows():
-
-            row_alerts = generate_alerts(
-                row
-            )
-
-            for level, message in row_alerts:
-
-                alert_records.append(
-                    {
-                        "Time": row.get(
-                            "received_at",
-                            ""
-                        ),
-                        "Battery": row.get(
-                            "Battery_ID",
-                            row.get(
-                                "battery_id",
-                                ""
-                            )
-                        ),
-                        "Cycle": row.get(
-                            "Cycle",
-                            ""
-                        ),
-                        "Level": level,
-                        "Alert": message
-                    }
-                )
-
-        if alert_records:
-
-            alerts_df = pd.DataFrame(
-                alert_records
-            )
-
-            st.dataframe(
-                alerts_df,
-                use_container_width=True
-            )
-
-        else:
-
-            st.success(
-                "No abnormal activity detected."
-            )
-
-    # ========================================================
-    # HISTORY PAGE
-    # ========================================================
-
-    elif page == "Battery History":
-
-        st.header(
-            "📚 Battery History"
-        )
-
-        st.write(
-            "Historical battery measurements "
-            "received through the MQTT pipeline."
-        )
-
-        st.dataframe(
-            df,
-            use_container_width=True
-        )
-
-    # ========================================================
-    # SYSTEM INFO
-    # ========================================================
-
-    elif page == "System Info":
-
-        st.header(
-            "⚙️ System Information"
-        )
-
-        st.subheader(
-            "Project Architecture"
-        )
-
-        st.code(
-            """
+    st.code(
+        """
 Synthetic Battery Data
         ↓
 MQTT Publisher
@@ -1105,108 +1215,58 @@ XGBoost AI Model
 Streamlit Dashboard
         ↓
 Real-Time Alerts
-            """
-        )
+        """,
+        language="text"
+    )
 
-        st.subheader(
-            "Database Status"
-        )
+    st.markdown("---")
 
-        if supabase_status:
+    st.subheader(
+        "Database Status"
+    )
 
-            st.success(
-                "Supabase: Connected"
-            )
+    st.write(
+        "Records loaded:",
+        len(df)
+    )
 
-        else:
+    st.write(
+        "Supabase configured:",
+        "Yes" if supabase is not None else "No"
+    )
 
-            st.error(
-                "Supabase: Not Connected"
-            )
+    st.write(
+        "AI Model loaded:",
+        "Yes" if model is not None else "No"
+    )
 
-        st.write(
-            f"Local SQLite Database: "
-            f"{'Available' if os.path.exists(DB_NAME) else 'Not Found'}"
-        )
+    st.markdown("---")
 
-        st.subheader(
-            "AI Model"
-        )
+    st.subheader(
+        "Monitoring Parameters"
+    )
 
-        if os.path.exists(MODEL_PATH):
+    st.write(
+        "Temperature warning threshold: 50 °C"
+    )
 
-            st.success(
-                "XGBoost model loaded."
-            )
+    st.write(
+        "Temperature critical threshold: 60 °C"
+    )
 
-        else:
+    st.write(
+        "SOH warning threshold: 85%"
+    )
 
-            st.error(
-                "XGBoost model not found."
-            )
-
-        st.subheader(
-            "Data Statistics"
-        )
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-
-            st.metric(
-                "Records Loaded",
-                len(df)
-            )
-
-        with col2:
-
-            if "Battery_ID" in df.columns:
-
-                batteries = df["Battery_ID"].nunique()
-
-            elif "battery_id" in df.columns:
-
-                batteries = df["battery_id"].nunique()
-
-            else:
-
-                batteries = 0
-
-            st.metric(
-                "Batteries",
-                batteries
-            )
-
-        with col3:
-
-            if "Cycle" in df.columns:
-
-                max_cycle = df["Cycle"].max()
-
-                st.metric(
-                    "Latest Cycle",
-                    int(max_cycle)
-                    if pd.notna(max_cycle)
-                    else "-"
-                )
+    st.write(
+        "SOH critical threshold: 75%"
+    )
 
 
-# ============================================================
-# RUN APPLICATION
-# ============================================================
+# =========================================================
+# AUTO REFRESH
+# =========================================================
 
-if not st.session_state.logged_in:
+time.sleep(2)
 
-    login_page()
-
-else:
-
-    dashboard()
-
-    # --------------------------------------------------------
-    # AUTO REFRESH
-    # --------------------------------------------------------
-
-    time.sleep(2)
-
-    st.rerun()
+st.rerun()
