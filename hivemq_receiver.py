@@ -4,6 +4,16 @@ import json
 import csv
 import os
 
+from dotenv import load_dotenv
+from supabase import create_client
+
+
+# =========================================================
+# LOAD ENVIRONMENT VARIABLES
+# =========================================================
+
+load_dotenv()
+
 
 # =========================================================
 # HiveMQ Cloud Configuration
@@ -12,22 +22,94 @@ import os
 BROKER = "2ed599332c774488978838f91633b9db.s1.eu.hivemq.cloud"
 PORT = 8883
 
-USERNAME = "EV"
-PASSWORD = "Iaj@4793"
+USERNAME = os.getenv("HIVEMQ_USERNAME")
+PASSWORD = os.getenv("HIVEMQ_PASSWORD")
 
 TOPIC = "ev/battery/data"
+
+
+# =========================================================
+# Supabase Configuration
+# =========================================================
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+
+# =========================================================
+# Check Environment Variables
+# =========================================================
+
+if not USERNAME:
+    raise ValueError(
+        "HIVEMQ_USERNAME is missing from .env"
+    )
+
+if not PASSWORD:
+    raise ValueError(
+        "HIVEMQ_PASSWORD is missing from .env"
+    )
+
+if not SUPABASE_URL:
+    raise ValueError(
+        "SUPABASE_URL is missing from .env"
+    )
+
+if not SUPABASE_KEY:
+    raise ValueError(
+        "SUPABASE_KEY is missing from .env"
+    )
+
+
+# =========================================================
+# Connect to Supabase
+# =========================================================
+
+try:
+
+    supabase = create_client(
+        SUPABASE_URL,
+        SUPABASE_KEY
+    )
+
+    print()
+    print("Supabase client initialized successfully.")
+
+except Exception as error:
+
+    print()
+    print("SUPABASE CONNECTION ERROR:")
+    print(
+        type(error).__name__,
+        ":",
+        error
+    )
+
+    raise
 
 
 # =========================================================
 # File Paths
 # =========================================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
 
-DB_FILE = os.path.join(BASE_DIR, "battery.db")
+DB_FILE = os.path.join(
+    BASE_DIR,
+    "battery.db"
+)
 
-CSV_DIR = os.path.join(BASE_DIR, "data")
-CSV_FILE = os.path.join(CSV_DIR, "mqtt_battery_data.csv")
+CSV_DIR = os.path.join(
+    BASE_DIR,
+    "data"
+)
+
+CSV_FILE = os.path.join(
+    CSV_DIR,
+    "mqtt_battery_data.csv"
+)
 
 
 # =========================================================
@@ -50,17 +132,22 @@ CSV_COLUMNS = [
 
 
 # =========================================================
-# Create data folder
+# Create Data Folder
 # =========================================================
 
-os.makedirs(CSV_DIR, exist_ok=True)
+os.makedirs(
+    CSV_DIR,
+    exist_ok=True
+)
 
 
 # =========================================================
-# Create SQLite database/table if needed
+# Create SQLite Database/Table
 # =========================================================
 
-conn = sqlite3.connect(DB_FILE)
+conn = sqlite3.connect(
+    DB_FILE
+)
 
 cursor = conn.cursor()
 
@@ -79,7 +166,7 @@ conn.close()
 
 
 # =========================================================
-# Create CSV if needed
+# Create CSV File
 # =========================================================
 
 if not os.path.exists(CSV_FILE):
@@ -116,11 +203,16 @@ def on_connect(
         print()
         print("Connected to HiveMQ Cloud!")
 
-        result = client.subscribe(TOPIC)
+        result = client.subscribe(
+            TOPIC
+        )
 
         if result[0] == mqtt.MQTT_ERR_SUCCESS:
 
-            print("Subscribed to:", TOPIC)
+            print(
+                "Subscribed to:",
+                TOPIC
+            )
 
         else:
 
@@ -133,7 +225,10 @@ def on_connect(
 
         print()
         print("Connection failed.")
-        print("Reason Code:", reason_code)
+        print(
+            "Reason Code:",
+            reason_code
+        )
 
 
 # =========================================================
@@ -150,7 +245,11 @@ def on_disconnect(
 
     print()
     print("MQTT DISCONNECTED")
-    print("Reason Code:", reason_code)
+
+    print(
+        "Reason Code:",
+        reason_code
+    )
 
 
 # =========================================================
@@ -165,27 +264,46 @@ def on_message(
 
     try:
 
-        # -------------------------------------------------
-        # Decode message
-        # -------------------------------------------------
+        # =================================================
+        # Decode Message
+        # =================================================
 
-        payload = message.payload.decode("utf-8")
+        payload = message.payload.decode(
+            "utf-8"
+        )
 
-        data = json.loads(payload)
+        data = json.loads(
+            payload
+        )
 
 
-        # -------------------------------------------------
-        # Extract values
-        # -------------------------------------------------
+        # =================================================
+        # Extract Values
+        # =================================================
 
-        battery_id = data.get("Battery_ID")
-        cycle = data.get("Cycle")
+        battery_id = data.get(
+            "Battery_ID"
+        )
 
-        voltage = data.get("Voltage_V")
-        current = data.get("Current_A")
-        temperature = data.get("Temperature_C")
+        cycle = data.get(
+            "Cycle"
+        )
 
-        capacity = data.get("Capacity_Ah")
+        voltage = data.get(
+            "Voltage_V"
+        )
+
+        current = data.get(
+            "Current_A"
+        )
+
+        temperature = data.get(
+            "Temperature_C"
+        )
+
+        capacity = data.get(
+            "Capacity_Ah"
+        )
 
         resistance = data.get(
             "Internal_Resistance_Ohm"
@@ -195,7 +313,9 @@ def on_message(
             "Charge_Time_min"
         )
 
-        soh = data.get("SOH")
+        soh = data.get(
+            "SOH"
+        )
 
         cooling = data.get(
             "Cooling_ON"
@@ -207,75 +327,171 @@ def on_message(
 
 
         # =================================================
-        # Save to SQLite
+        # SAVE TO LOCAL SQLITE
         # =================================================
 
-        conn = sqlite3.connect(DB_FILE)
+        try:
 
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO battery_data
-            (
-                battery_id,
-                cycle,
-                raw_data
+            conn = sqlite3.connect(
+                DB_FILE
             )
-            VALUES (?, ?, ?)
-            """,
-            (
-                str(battery_id),
-                cycle,
-                json.dumps(data)
+
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO battery_data
+                (
+                    battery_id,
+                    cycle,
+                    raw_data
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    str(battery_id),
+                    cycle,
+                    json.dumps(data)
+                )
             )
-        )
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+            conn.close()
+
+            sqlite_status = True
+
+        except Exception as sqlite_error:
+
+            sqlite_status = False
+
+            print()
+            print("SQLITE ERROR:")
+
+            print(
+                type(sqlite_error).__name__,
+                ":",
+                sqlite_error
+            )
 
 
         # =================================================
-        # Save to CSV
+        # SAVE TO CSV
         # =================================================
 
-        csv_row = {
+        try:
 
-            "Battery_ID": battery_id,
-            "Cycle": cycle,
-            "Voltage_V": voltage,
-            "Current_A": current,
-            "Temperature_C": temperature,
-            "Capacity_Ah": capacity,
-            "Internal_Resistance_Ohm": resistance,
-            "Charge_Time_min": charge_time,
-            "SOH": soh,
-            "Cooling_ON": cooling,
-            "Load_Reduced": load_reduced
+            csv_row = {
+
+                "Battery_ID": battery_id,
+
+                "Cycle": cycle,
+
+                "Voltage_V": voltage,
+
+                "Current_A": current,
+
+                "Temperature_C": temperature,
+
+                "Capacity_Ah": capacity,
+
+                "Internal_Resistance_Ohm": resistance,
+
+                "Charge_Time_min": charge_time,
+
+                "SOH": soh,
+
+                "Cooling_ON": cooling,
+
+                "Load_Reduced": load_reduced
+            }
+
+
+            with open(
+                CSV_FILE,
+                "a",
+                newline="",
+                encoding="utf-8"
+            ) as file:
+
+                writer = csv.DictWriter(
+                    file,
+                    fieldnames=CSV_COLUMNS
+                )
+
+                writer.writerow(
+                    csv_row
+                )
+
+            csv_status = True
+
+        except Exception as csv_error:
+
+            csv_status = False
+
+            print()
+            print("CSV ERROR:")
+
+            print(
+                type(csv_error).__name__,
+                ":",
+                csv_error
+            )
+
+
+        # =================================================
+        # SAVE TO SUPABASE
+        # =================================================
+
+        supabase_record = {
+
+            "battery_id": str(
+                battery_id
+            ),
+
+            "cycle": cycle,
+
+            "raw_data": data
         }
 
 
-        with open(
-            CSV_FILE,
-            "a",
-            newline="",
-            encoding="utf-8"
-        ) as file:
+        try:
 
-            writer = csv.DictWriter(
-                file,
-                fieldnames=CSV_COLUMNS
+            supabase_response = (
+                supabase
+                .table("battery_data")
+                .insert(
+                    supabase_record
+                )
+                .execute()
             )
 
-            writer.writerow(csv_row)
+            supabase_status = True
+
+            print()
+            print(
+                "Supabase: DATA SAVED SUCCESSFULLY"
+            )
+
+        except Exception as supabase_error:
+
+            supabase_status = False
+
+            print()
+            print("SUPABASE ERROR:")
+
+            print(
+                type(supabase_error).__name__,
+                ":",
+                supabase_error
+            )
 
 
         # =================================================
-        # Display data
+        # DISPLAY DATA
         # =================================================
 
         print()
-        print("=" * 55)
+        print("=" * 60)
 
         print(
             "Battery ID    :",
@@ -348,16 +564,29 @@ def on_message(
 
         print()
         print(
-            "Saved to      : battery.db + CSV"
+            "SQLite        :",
+            "SAVED" if sqlite_status else "FAILED"
         )
 
-        print("=" * 55)
+        print(
+            "CSV           :",
+            "SAVED" if csv_status else "FAILED"
+        )
+
+        print(
+            "Supabase      :",
+            "SAVED" if supabase_status else "FAILED"
+        )
+
+        print("=" * 60)
 
 
     except json.JSONDecodeError:
 
         print()
-        print("ERROR: Invalid JSON received.")
+        print(
+            "ERROR: Invalid JSON received."
+        )
 
         print(
             message.payload.decode(
@@ -367,15 +596,17 @@ def on_message(
         )
 
 
-    except Exception as e:
+    except Exception as error:
 
         print()
-        print("ERROR while processing message:")
+        print(
+            "ERROR while processing message:"
+        )
 
         print(
-            type(e).__name__,
+            type(error).__name__,
             ":",
-            e
+            error
         )
 
 
@@ -418,16 +649,18 @@ client.on_message = on_message
 
 
 # =========================================================
-# START
+# START RECEIVER
 # =========================================================
 
 print()
 print("==============================================")
-print(" EV SOH - HiveMQ Receiver")
+print(" EV SOH - HiveMQ + Supabase Receiver")
 print("==============================================")
 
 print()
-print("Connecting to HiveMQ Cloud...")
+print(
+    "Connecting to HiveMQ Cloud..."
+)
 
 
 try:
@@ -444,16 +677,18 @@ try:
 except KeyboardInterrupt:
 
     print()
-    print("Receiver stopped by user.")
+    print(
+        "Receiver stopped by user."
+    )
 
 
-except Exception as e:
+except Exception as error:
 
     print()
     print("MQTT ERROR:")
 
     print(
-        type(e).__name__,
+        type(error).__name__,
         ":",
-        e
+        error
     )

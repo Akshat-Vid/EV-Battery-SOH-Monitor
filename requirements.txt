@@ -1,7 +1,6 @@
 streamlit
 pandas
-plotly
-joblib
-scikit-learn
 xgboost
-paho-mqtt
+scikit-learn
+supabase
+python-dotenv
